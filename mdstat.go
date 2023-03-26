@@ -23,7 +23,7 @@ import (
 
 var (
 	statusLineRE         = regexp.MustCompile(`(\d+) blocks .*\[(\d+)/(\d+)\] \[([U_]+)\]`)
-	recoveryLineBlocksRE = regexp.MustCompile(`\((\d+)/\d+\)`)
+	recoveryLineBlocksRE = regexp.MustCompile(`\((\d+)/(\d+)\)`)
 	recoveryLinePctRE    = regexp.MustCompile(`= (.+)%`)
 	recoveryLineFinishRE = regexp.MustCompile(`finish=(.+)min`)
 	recoveryLineSpeedRE  = regexp.MustCompile(`speed=(.+)[A-Z]`)
@@ -114,7 +114,7 @@ func parseMDStat(mdStatData []byte) ([]MDStat, error) {
 		}
 
 		// If device is syncing at the moment, get the number of currently
-		// synced bytes, otherwise that number equals the size of the device.
+		// synced blocks, otherwise that number equals the size of the device.
 		syncedBlocks := size
 		speed := float64(0)
 		finish := float64(0)
@@ -138,7 +138,7 @@ func parseMDStat(mdStatData []byte) ([]MDStat, error) {
 				strings.Contains(lines[syncLineIdx], "DELAYED") {
 				syncedBlocks = 0
 			} else {
-				syncedBlocks, pct, finish, speed, err = evalRecoveryLine(lines[syncLineIdx])
+				syncedBlocks, pct, finish, speed, err = evalRecoveryLine(lines[syncLineIdx], size)
 				if err != nil {
 					return nil, fmt.Errorf("error parsing sync line in md device %q: %w", mdName, err)
 				}
@@ -206,13 +206,16 @@ func evalStatusLine(deviceLine, statusLine string) (active, total, down, size in
 	return active, total, down, size, nil
 }
 
-func evalRecoveryLine(recoveryLine string) (syncedBlocks int64, pct float64, finish float64, speed float64, err error) {
+func evalRecoveryLine(recoveryLine string, sizeBlocks int64) (syncedBlocks int64, pct float64, finish float64, speed float64, err error) {
 	matches := recoveryLineBlocksRE.FindStringSubmatch(recoveryLine)
-	if len(matches) != 2 {
+	if len(matches) != 3 {
 		return 0, 0, 0, 0, fmt.Errorf("unexpected recoveryLine: %s", recoveryLine)
 	}
 
-	syncedBlocks, err = strconv.ParseInt(matches[1], 10, 64)
+	// These values may be scaled by a power of two
+	syncedBlocksScaled, err := strconv.ParseInt(matches[1], 10, 64)
+	totalBlocksScaled, err := strconv.ParseInt(matches[2], 10, 64)
+	syncedBlocks = syncedBlocksScaled * (sizeBlocks / totalBlocksScaled)
 	if err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("error parsing int from recoveryLine %q: %w", recoveryLine, err)
 	}

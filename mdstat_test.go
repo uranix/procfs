@@ -13,8 +13,12 @@
 
 package procfs
 
-import "testing"
-import "github.com/google/go-cmp/cmp"
+import (
+	"math"
+	"testing"
+
+	"github.com/google/go-cmp/cmp"
+)
 
 func TestFS_MDStat(t *testing.T) {
 	fs := getProcFixtures(t)
@@ -50,6 +54,57 @@ func TestFS_MDStat(t *testing.T) {
 	for _, md := range mdStats {
 		if want, have := refs[md.Name], md; !cmp.Equal(want, have) {
 			t.Errorf("%s: want %v, have %v", md.Name, want, have)
+		}
+	}
+
+}
+
+func TestMdstatScaledProgress(t *testing.T) {
+
+	hugeArrayMdstat := []byte(`
+Personalities : [raid6] [raid5] [raid4]
+md0 : active raid6 sdj1[9] sdi1[8] sdh1[7] sde1[4] sdg1[6] sda1[0] sdb1[1] sdc1[2] sdf1[5] sdd1[3]
+      140617179136 blocks super 1.2 level 6, 512k chunk, algorithm 2 [10/10] [UUUUUUUUUU]
+      [==========>..........]  resync = 51.6% (9083530032/17577147392) finish=732.9min speed=193145K/sec
+      bitmap: 64/131 pages [256KB], 65536KB chunk
+
+unused devices: <none>
+`)
+
+	mdStats, err := parseMDStat(hugeArrayMdstat)
+
+	if err != nil {
+		t.Fatalf("parsing of mdstat failed entirely: %s", err)
+	}
+
+	progressScale := int64(140617179136) / int64(17577147392)
+	refs := map[string]MDStat{
+		"md0": {
+			Name:                   "md0",
+			ActivityState:          "resyncing",
+			DisksActive:            10,
+			DisksTotal:             10,
+			DisksFailed:            0,
+			DisksDown:              0,
+			DisksSpare:             0,
+			BlocksTotal:            140617179136,
+			BlocksSynced:           9083530032 * progressScale,
+			BlocksSyncedPct:        51.6,
+			BlocksSyncedFinishTime: 732.9,
+			BlocksSyncedSpeed:      193145,
+			Devices:                []string{"sdj1", "sdi1", "sdh1", "sde1", "sdg1", "sda1", "sdb1", "sdc1", "sdf1", "sdd1"},
+		},
+	}
+
+	if want, have := len(refs), len(mdStats); want != have {
+		t.Errorf("want %d parsed md-devices, have %d", want, have)
+	}
+	for _, md := range mdStats {
+		if want, have := refs[md.Name], md; !cmp.Equal(want, have) {
+			t.Errorf("%s: want %v, have %v", md.Name, want, have)
+		}
+		if havePct := 100.0 * float64(md.BlocksSynced) / float64(md.BlocksTotal); math.Abs(havePct-md.BlocksSyncedPct) > 0.1 {
+			t.Errorf("%s: synced pct %v, have %v", md.Name, md.BlocksSyncedPct, havePct)
 		}
 	}
 
